@@ -33,9 +33,10 @@ matrix:
     - python: 2.7
       env:
         - INSTALL_TYPE=sdist
-    - python: 2.7
-      env:
-        - INSTALL_TYPE=wheel
+    # Disable wheel build for now - versioning not working correctly
+    # - python: 2.7
+    #   env:
+    #     - INSTALL_TYPE=wheel
     - python: 2.7
       env:
         - INSTALL_TYPE=requirements
