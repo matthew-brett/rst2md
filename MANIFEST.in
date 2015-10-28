@@ -1,0 +1,6 @@
+include versioneer.py
+include rst2md/_version.py
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include rst2md/tests/data *
