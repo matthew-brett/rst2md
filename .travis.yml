@@ -1,0 +1,87 @@
+language: python
+
+# Run jobs on container-based infrastructure, can be overridden per job
+sudo: false
+
+cache:
+  directories:
+    - $HOME/.cache/pip
+
+env:
+    global:
+        - DEPENDS="docutils"
+        - PKG_NAME="doctree2md"
+        - INSTALL_TYPE="setup"
+
+python:
+    - 2.6
+    - 3.2
+    - 3.3
+    - 3.4
+    - 3.5
+
+matrix:
+  include:
+    - python: 2.7
+      env:
+        - COVERAGE=1
+        - DOCTESTS=1
+    # Absolute minimum dependencies
+    - python: 2.7
+      env:
+        - DEPENDS="docutils==0.8"
+    - python: 2.7
+      env:
+        - INSTALL_TYPE=sdist
+    # Disable wheel build for now - versioning not working correctly
+    # - python: 2.7
+    #   env:
+    #     - INSTALL_TYPE=wheel
+    - python: 2.7
+      env:
+        - INSTALL_TYPE=requirements
+        - DEPENDS=
+
+before_install:
+    - source tools/travis_tools.sh
+    - virtualenv venv
+    - source venv/bin/activate
+    - retry pip install nose # always
+    - wheelhouse_pip_install $DEPENDS
+    - if [ "${COVERAGE}" == "1" ]; then
+      pip install coverage;
+      pip install coveralls;
+      fi
+
+install:
+    - |
+      if [ "$INSTALL_TYPE" == "setup" ]; then
+          python setup.py install
+      elif [ "$INSTALL_TYPE" == "sdist" ]; then
+        python setup.py egg_info  # check egg_info while we're here
+        python setup.py sdist
+        wheelhouse_pip_install dist/*.tar.gz
+      elif [ "$INSTALL_TYPE" == "wheel" ]; then
+        pip install wheel
+        python setup.py bdist_wheel
+        wheelhouse_pip_install dist/*.whl
+      elif [ "$INSTALL_TYPE" == "requirements" ]; then
+        wheelhouse_pip_install -r requirements.txt
+        python setup.py install
+      fi
+
+script:
+    # Change into an innocuous directory and find tests from installation
+    - mkdir for_testing
+    - cd for_testing
+    - if [ "${COVERAGE}" == "1" ]; then
+      cp ../.coveragerc .;
+      COVER_ARGS="--with-coverage --cover-package $PKG_NAME";
+      fi
+    - if [ "${DOCTESTS}" == "1" ]; then
+      DOCTEST_ARGS="--with-doctest";
+      fi
+    - nosetests $COVER_ARGS $DOCTEST_ARGS $PKG_NAME
+
+after_success:
+    - if [ "${COVERAGE}" == "1" ]; then coveralls; fi
