@@ -381,6 +381,21 @@ class Translator(nodes.NodeVisitor):
         self.add('\n---\n\n')
         raise nodes.SkipNode
 
+    def visit_reference(self, node):
+        if 'refuri' not in node:
+            return
+        self.add('[{0}]({1})'.format(node.astext(), node['refuri']))
+        raise nodes.SkipNode
+
+    def depart_reference(self, node):
+        pass
+
+    def visit_target(self, node):
+        pass
+
+    def depart_target(self, node):
+        pass
+
 # The following code adds visit/depart methods for any reStructuredText element
 # which we have not explicitly implemented above.
 
