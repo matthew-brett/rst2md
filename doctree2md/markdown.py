@@ -267,7 +267,8 @@ class Translator(nodes.NodeVisitor):
         self.add('$$\n\n')
 
     def visit_literal_block(self, node):
-        self.add('```\n')
+        code_type = node['classes'][1] if 'code' in node['classes'] else ''
+        self.add('```' + code_type + '\n')
 
     def depart_literal_block(self, node):
         self.ensure_eol()
@@ -394,6 +395,12 @@ class Translator(nodes.NodeVisitor):
         pass
 
     def depart_target(self, node):
+        pass
+
+    def visit_inline(self, node):
+        pass
+
+    def depart_inline(self, node):
         pass
 
 # The following code adds visit/depart methods for any reStructuredText element
