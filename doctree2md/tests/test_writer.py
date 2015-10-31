@@ -59,6 +59,9 @@ def test_example_files():
 
 
 def test_snippets():
-    assert_conv_equal("Some text", "\nSome text\n")
-    assert_conv_equal("With *emphasis*", "\nWith *emphasis*\n")
-    assert_conv_equal("That's **strong**", "\nThat's **strong**\n")
+    assert_conv_equal("Some text", "Some text\n")
+    assert_conv_equal("With *emphasis*", "With *emphasis*\n")
+    assert_conv_equal("That's **strong**", "That's **strong**\n")
+    assert_conv_equal("As ``literal``", "As `literal`\n")
+    assert_conv_equal("To ``defrole``", "To `defrole`\n")
+    assert_conv_equal("Now :math:`a = 1`", "Now $a = 1$\n")

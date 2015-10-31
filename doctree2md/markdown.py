@@ -43,7 +43,61 @@ class Writer(writers.Writer):
         self.output = visitor.astext()
 
 
+class IndentLevel(object):
+    """ Class to hold text being written for a certain indentation level
+
+    For example, all text in list_elements need to be indented.  A list_element
+    creates one of these indentation levels, and all text contained in the
+    list_element gets written to this IndentLevel.  When we leave the
+    list_element, we ``write`` the text with suitable prefixes to the next
+    level down, which might be the base of the document (document body) or
+    another indentation level, if this is - for example - a nested list.
+    """
+    def __init__(self, base, prefix, first_prefix=None):
+        self.base = base  # The list to which we eventually write
+        self.prefix = prefix  # Text prepended to lines
+        # Text prepended to first list
+        self.first_prefix = prefix if first_prefix is None else first_prefix
+        # Our own list to which we append before doing a ``write``
+        self.content = []
+
+    def append(self, new):
+        self.content.append(new)
+
+    def __getitem__(self, index):
+        return self.content[index]
+
+    def len(self):
+        return len(self.content)
+
+    def __bool__(self):
+        return len(self) != 0
+
+    def write(self):
+        """ Add ``self.contents`` with current ``prefix`` and ``first_prefix``
+
+        Add processed ``self.contents`` to ``self.base``.  The first line has
+        ``first_prefix`` prepended, further lines have ``prefix`` prepended.
+
+        Empty (all whitepsace) lines get written as bare carriage returns, to
+        avoid ugly extra whitespace.
+        """
+        string = ''.join(self.content)
+        lines = string.splitlines(True)
+        if len(lines) == 0:
+            return
+        texts = [self.first_prefix + lines[0]]
+        for line in lines[1:]:
+            if line.strip() == '':  # avoid prefix for empty lines
+                texts.append('\n')
+            else:
+                texts.append(self.prefix + line)
+        self.base.append(''.join(texts))
+
+
 class Translator(nodes.NodeVisitor):
+
+    std_indent = '    '
 
     def __init__(self, document):
         nodes.NodeVisitor.__init__(self, document)
@@ -54,8 +108,25 @@ class Translator(nodes.NodeVisitor):
         self.head = []
         self.body = []
         self.foot = []
+        # Lookup table to get section list from name
+        self._lists = dict(head=self.head,
+                           body=self.body,
+                           foot=self.foot)
 
+        # Current section heading level during writing
         self.section_level = 0
+
+        # FIFO list of list prefixes, while writing nested lists.  Each element
+        # corresponds to one level of nesting.  Thus ['1. ', '1. ', '* '] would
+        # occur when writing items of an unordered list, that is nested within
+        # an ordered list, that in turn is nested in another ordered list.
+        self.list_prefixes = []
+
+        # FIFO list of indentation levels.  When we are writing a block of text
+        # that should be indented, we create a new indentation level.  We only
+        # write the text when we leave the indentation level, so we can insert
+        # the correct prefix for every line.
+        self.indent_levels = []
 
         ##TODO docinfo items can go in a footer HTML element (store in self.foot).
         self._docinfo = {
@@ -67,12 +138,14 @@ class Translator(nodes.NodeVisitor):
             'version' : '',
             }
 
-        # Customise Markdown syntax here. Still need to add literal, term,
+        # Customise Markdown syntax here. Still need to add term,
         # indent, problematic etc...
         self.defs = {
             'emphasis': ('*', '*'),   # Could also use ('_', '_')
             'problematic' : ('\n\n', '\n\n'),
             'strong' : ('**', '**'),  # Could also use ('__', '__')
+            'literal' : ('`', '`'),
+            'math' : ('$', '$'),
             'subscript' : ('<sub>', '</sub>'),
             'superscript' : ('<sup>', '</sup>'),
             }
@@ -89,21 +162,72 @@ class Translator(nodes.NodeVisitor):
         return text
 
     def ensure_eol(self):
-        """Ensure the last line in body is terminated by new line."""
-        if self.body and self.body[-1][-1] != '\n':
-            self.body.append('\n')
+        """Ensure the last line in current base is terminated by new line."""
+        out = self.get_current_output()
+        if out and out[-1] and out[-1][-1] != '\n':
+            out.append('\n')
+
+    def get_current_output(self, section='body'):
+        """ Get list or IndentLevel to which we are currently writing """
+        return (self.indent_levels[-1] if self.indent_levels
+                else self._lists[section])
+
+    def add(self, string, section='body'):
+        """ Add `string` to `section` or current output
+
+        Parameters
+        ----------
+        string : str
+            String to add to output document
+        section : {'body', 'head', 'foot'}, optional
+            Section of document that generated text should be appended to, if
+            not already appending to an indent level.
+        """
+        self.get_current_output(section).append(string)
+
+    def add_section(self, string, section='body'):
+        """ Add `string` to `section` regardless of current output
+
+        Can be useful when forcing write to header or footer.
+
+        Parameters
+        ----------
+        string : str
+            String to add to output document
+        section : {'body', 'head', 'foot'}, optional
+            Section of document that generated text should be appended to.
+        """
+        self._lists[section].append(string)
+
+    def start_level(self, prefix, first_prefix=None, section='body'):
+        """ Create a new IndentLevel with `prefix` and `first_prefix`
+        """
+        base = (self.indent_levels[-1].content if self.indent_levels else
+                self._lists[section])
+        level = IndentLevel(base, prefix, first_prefix)
+        self.indent_levels.append(level)
+
+    def finish_level(self):
+        """ Remove most recent IndentLevel and write contents
+        """
+        level = self.indent_levels.pop()
+        level.write()
+
+    @property
+    def current_prefix(self):
+        return self.indent_levels[-1].prefix if self.indent_levels else ''
 
     # Node visitor methods
 
     def visit_Text(self, node):
         text = node.astext()
-        self.body.append(text)
+        self.add(text)
 
     def depart_Text(self, node):
         pass
 
     def visit_comment(self, node):
-        self.body.append('<!-- ' + node.astext() + ' -->\n')
+        self.add('<!-- ' + node.astext() + ' -->\n')
         raise nodes.SkipNode
 
     def visit_docinfo_item(self, node, name):
@@ -117,26 +241,49 @@ class Translator(nodes.NodeVisitor):
         pass
 
     def depart_document(self, node):
-        pass
+        # Drop trailing carriage return from ends of lists
+        for L in (self.head, self.body, self.foot):
+            if L and L[-1] == '\n':
+                L.pop()
 
     def visit_emphasis(self, node):
-        self.body.append(self.defs['emphasis'][0])
+        self.add(self.defs['emphasis'][0])
 
     def depart_emphasis(self, node):
-        self.body.append(self.defs['emphasis'][1])
+        self.add(self.defs['emphasis'][1])
 
     def visit_paragraph(self, node):
-        self.ensure_eol()
-        self.body.append('\n')
+        pass
 
     def depart_paragraph(self, node):
-        self.body.append('\n')
+        self.ensure_eol()
+        self.add('\n')
+
+    def visit_math_block(self, node):
+        self.add('$$\n')
+
+    def depart_math_block(self, node):
+        self.ensure_eol()
+        self.add('$$\n\n')
+
+    def visit_literal_block(self, node):
+        self.add('```\n')
+
+    def depart_literal_block(self, node):
+        self.ensure_eol()
+        self.add('```\n\n')
+
+    def visit_block_quote(self, node):
+        self.start_level('> ')
+
+    def depart_block_quote(self, node):
+        self.finish_level()
 
     def visit_problematic(self, node):
-        self.body.append(self.defs['problematic'][0])
+        self.add(self.defs['problematic'][0])
 
     def depart_problematic(self, node):
-        self.body.append(self.defs['problematic'][1])
+        self.add(self.defs['problematic'][1])
 
     def visit_section(self, node):
         self.section_level += 1
@@ -145,16 +292,47 @@ class Translator(nodes.NodeVisitor):
         self.section_level -= 1
 
     def visit_strong(self, node):
-        self.body.append(self.defs['strong'][0])
+        self.add(self.defs['strong'][0])
 
     def depart_strong(self, node):
-        self.body.append(self.defs['strong'][1])
+        self.add(self.defs['strong'][1])
+
+    def visit_literal(self, node):
+        self.add(self.defs['literal'][0])
+
+    def depart_literal(self, node):
+        self.add(self.defs['literal'][1])
+
+    def visit_math(self, node):
+        self.add(self.defs['math'][0])
+
+    def depart_math(self, node):
+        self.add(self.defs['math'][1])
+
+    def visit_enumerated_list(self, node):
+        self.list_prefixes.append('1. ')
+
+    def depart_enumerated_list(self, node):
+        self.list_prefixes.pop()
+
+    def visit_bullet_list(self, node):
+        self.list_prefixes.append('* ')
+
+    depart_bullet_list = depart_enumerated_list
+
+    def visit_list_item(self, node):
+        first_prefix = self.list_prefixes[-1]
+        prefix = ' ' * len(first_prefix)
+        self.start_level(prefix, first_prefix)
+
+    def depart_list_item(self, node):
+        self.finish_level()
 
     def visit_subscript(self, node):
-        self.body.append(self.defs['subscript'][0])
+        self.add(self.defs['subscript'][0])
 
     def depart_subscript(self, node):
-        self.body.append(self.defs['subscript'][1])
+        self.add(self.defs['subscript'][1])
 
     def visit_subtitle(self, node):
         if isinstance(node.parent, nodes.document):
@@ -162,10 +340,10 @@ class Translator(nodes.NodeVisitor):
             raise SkipNode
 
     def visit_superscript(self, node):
-        self.body.append(self.defs['superscript'][0])
+        self.add(self.defs['superscript'][0])
 
     def depart_superscript(self, node):
-        self.body.append(self.defs['superscript'][1])
+        self.add(self.defs['superscript'][1])
 
     def visit_system_message(self, node):
         # TODO add report_level
@@ -180,7 +358,7 @@ class Translator(nodes.NodeVisitor):
             line = ', line %s' % node['line']
         else:
             line = ''
-        self.body.append('"System Message: %s/%s (%s:%s)"\n'
+        self.add('"System Message: %s/%s (%s:%s)"\n'
             % (node['type'], node['level'], node['source'], line))
 
     def depart_system_message(self, node):
@@ -188,24 +366,22 @@ class Translator(nodes.NodeVisitor):
 
     def visit_title(self, node):
         if self.section_level == 0:
-            self.head.append('# {0}\n'.format(node.astext()))
+            self.add_section('# ', section='head')
             self._docinfo['title'] = node.astext()
-            raise nodes.SkipNode
         else:
-            self.body.append('{0} {1}\n'.format((self.section_level+1)*'#',
-                self.deunicode(node.astext())))
-            raise nodes.SkipNode
+            self.add((self.section_level + 1) * '#' + ' ')
 
     def depart_title(self, node):
-        self.body.append('\n')
+        self.ensure_eol()
+        self.add('\n')
 
     def visit_transition(self, node):
         # Simply replace a transition by a horizontal rule.
         # Could use three or more '*', '_' or '-'.
-        self.body.append('\n---\n\n')
+        self.add('\n---\n\n')
         raise nodes.SkipNode
 
-# The following code adds visit/depart methods for any reSturcturedText element
+# The following code adds visit/depart methods for any reStructuredText element
 # which we have not explicitly implemented above.
 
 # All reStructuredText elements:
